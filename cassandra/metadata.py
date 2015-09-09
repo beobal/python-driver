@@ -1021,12 +1021,17 @@ class TableMetadata(object):
         ret = self.as_cql_query(formatted=True)
         ret += ";"
 
-        for col_meta in self.columns.values():
-            if col_meta.index:
-                ret += "\n%s;" % (col_meta.index.as_cql_query(),)
+        ret += self.indexes_as_cql()
 
         for trigger_meta in self.triggers.values():
             ret += "\n%s;" % (trigger_meta.as_cql_query(),)
+        return ret
+
+    def indexes_as_cql(self):
+        ret = ""
+        for col_meta in self.columns.values():
+            if col_meta.index:
+                ret += "\n%s;" % (col_meta.index.as_cql_query(),)
         return ret
 
     def as_cql_query(self, formatted=False):
@@ -2074,9 +2079,7 @@ class SchemaParserV3(SchemaParserV22):
         index_type = row.get("index_type")
         if index_name or index_type:
             index_options = dict(row.get("options") or {})
-            target_columns = row.get('target_columns') or set()
-            target_type = row.get('target_type')
-            return IndexMetadataV3(table_metadata, index_name, index_type, index_options, target_columns, target_type)
+            return IndexMetadataV3(table_metadata, index_name, index_type, index_options)
         else:
             return None
 
@@ -2132,6 +2135,14 @@ class TableMetadataV3(TableMetadata):
     def is_cql_compatible(self):
         return True
 
+    def indexes_as_cql(self):
+        ret = ""
+        # sort by index name as an approximation of how pre-3.0 output was
+        # formatted, where indexes were printed in column order
+        for index_name in sorted(self.indexes.keys()):
+            ret += "\n%s;" % (self.indexes[index_name].as_cql_query(),)
+        return ret
+
     def _make_option_strings(self):
         ret = []
         options_copy = dict(self.options.items())
@@ -2157,12 +2168,6 @@ class IndexMetadataV3(IndexMetadata):
     The table (:class:`.TableMetadata`) this index is on.
     """
 
-    columns = None
-    """
-    The set of columns (:class:`.ColumnMetadata`) this index is on
-    (may be empty for per-row indexes).
-    """
-
     name = None
     """ A string name for the index. """
 
@@ -2172,24 +2177,37 @@ class IndexMetadataV3(IndexMetadata):
     index_options = {}
     """ A dict of index options. """
 
-    target_columns = set()
-    """ A set of target columns """
-
-    target_type = None
-
-    def __init__(self, table_metadata, index_name, index_type, index_options, target_columns, target_type):
+    def __init__(self, table_metadata, index_name, index_type, index_options):
         self.table = table_metadata
         self.name = index_name
         self.index_type = index_type
         self.index_options = index_options
-        self.target_columns = set(target_columns)
-        self.target_type = target_type
+        table_metadata.indexes[index_name] = self;
 
-        # TODO: temporary until we diverge more with multiple column indexes
-        # giving the base class what it expects
-        self.column = table_metadata.columns[tuple(target_columns)[0]]
-        self.column.index = self
-
+    def as_cql_query(self):
+        """
+        Returns a CQL query that can be used to recreate this index.
+        """
+        table = self.table
+        user_options = dict(self.index_options)
+        index_target = user_options.pop("target")
+        # for plain values indexes, the target is actually stored as 'values(<col>)'
+        # so strip that off when creating the cql string
+        if index_target.startswith('values('):
+            index_target = index_target[7:-1]
+        if self.index_type != "CUSTOM":
+            return "CREATE INDEX %s ON %s.%s (%s)" % (
+                self.name,  # Cassandra doesn't like quoted index names for some reason
+                protect_name(table.keyspace.name),
+                protect_name(table.name),
+                index_target)
+        else:
+            return "CREATE CUSTOM INDEX %s ON %s.%s (%s) USING '%s'" % (
+                self.name,  # Cassandra doesn't like quoted index names for some reason
+                protect_name(table.keyspace.name),
+                protect_name(table.name),
+                protect_name(self.column.name),
+                self.index_options["class_name"])
 
 def get_schema_parser(connection, timeout):
     server_version = connection.server_version
