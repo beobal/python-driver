@@ -2076,7 +2076,7 @@ class SchemaParserV3(SchemaParserV22):
     @staticmethod
     def _build_index_metadata(table_metadata, row):
         index_name = row.get("index_name")
-        index_type = row.get("index_type")
+        index_type = row.get("kind")
         if index_name or index_type:
             index_options = dict(row.get("options") or {})
             return IndexMetadataV3(table_metadata, index_name, index_type, index_options)
