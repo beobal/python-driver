@@ -2191,10 +2191,6 @@ class IndexMetadataV3(IndexMetadata):
         table = self.table
         user_options = dict(self.index_options)
         index_target = user_options.pop("target")
-        # for plain values indexes, the target is actually stored as 'values(<col>)'
-        # so strip that off when creating the cql string
-        if index_target.startswith('values('):
-            index_target = index_target[7:-1]
         if self.index_type != "CUSTOM":
             return "CREATE INDEX %s ON %s.%s (%s)" % (
                 self.name,  # Cassandra doesn't like quoted index names for some reason
@@ -2202,12 +2198,13 @@ class IndexMetadataV3(IndexMetadata):
                 protect_name(table.name),
                 index_target)
         else:
+            index_class = user_options.pop("class_name")
             return "CREATE CUSTOM INDEX %s ON %s.%s (%s) USING '%s'" % (
                 self.name,  # Cassandra doesn't like quoted index names for some reason
                 protect_name(table.keyspace.name),
                 protect_name(table.name),
-                protect_name(self.column.name),
-                self.index_options["class_name"])
+                index_target,
+                index_class)
 
 def get_schema_parser(connection, timeout):
     server_version = connection.server_version
